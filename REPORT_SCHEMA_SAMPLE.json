@@ -1,0 +1,36 @@
+{
+  "tool": {
+    "name": "HSONScanner",
+    "version": "1.0.0",
+    "scope": "read-only-ui-runtime-metadata",
+    "generatedAt": "2026-11-08T00:00:00.000Z"
+  },
+  "app": {
+    "bundleIdentifier": "com.example.placeholder",
+    "name": "Example App",
+    "shortVersion": "14.3.3",
+    "build": "example-build",
+    "executable": "ExampleApp"
+  },
+  "device": {
+    "architecture": "arm64",
+    "machine": "iPhone",
+    "systemVersion": "18.0",
+    "deviceModel": "iPhone",
+    "processID": 1234,
+    "processName": "ExampleApp"
+  },
+  "loadedAppImages": [],
+  "appUIClasses": [],
+  "visibleUI": {
+    "available": true,
+    "viewControllers": [],
+    "topLevelViewClasses": []
+  },
+  "privacy": {
+    "networkRequests": false,
+    "methodImplementationsRead": false,
+    "methodsInvoked": false,
+    "authenticationOrPaymentDataCollected": false
+  }
+}
