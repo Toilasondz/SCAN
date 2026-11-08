@@ -16,154 +16,134 @@ jobs:
     runs-on: macos-15
 
     steps:
-      # 1. Checkout source
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # 2. Install dependencies and signing tool
       - name: Install dependencies
         run: |
-          brew update
           brew install dpkg ldid
-
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
-          command -v ldid
-          command -v dpkg-deb
-
-      # 3. Install Theos
       - name: Install Theos
         run: |
           git clone --depth 1 --recursive \
-            https://github.com/theos/theos.git \
-            "$HOME/theos"
-
+            https://github.com/theos/theos.git "$HOME/theos"
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
 
-      # 4. Install iOS SDK
       - name: Install iOS SDK
         run: |
           git clone --depth 1 \
-            https://github.com/theos/sdks.git \
-            /tmp/theos-sdks
+            https://github.com/theos/sdks.git /tmp/theos-sdks
 
           mkdir -p "$HOME/theos/sdks"
 
           python3 - <<'PY'
-          import os
-          import glob
-          import re
-          import shutil
-
-          root = "/tmp/theos-sdks"
-          destination = os.path.expanduser("~/theos/sdks")
+          import os, glob, re, shutil
 
           paths = glob.glob(
-              root + "/**/iPhoneOS*.sdk",
+              "/tmp/theos-sdks/**/iPhoneOS*.sdk",
               recursive=True
           )
-
-          paths = [
-              p for p in paths
-              if os.path.isdir(p)
-          ]
+          paths = [p for p in paths if os.path.isdir(p)]
 
           if not paths:
-              raise SystemExit("ERROR: No iPhoneOS SDK found")
+              raise SystemExit("No iPhoneOS SDK found")
 
-          def version(path):
-              name = os.path.basename(path)
-              match = re.search(
+          def ver(p):
+              m = re.search(
                   r'iPhoneOS([0-9.]+)\.sdk',
-                  name
+                  os.path.basename(p)
               )
-              if not match:
-                  return (0,)
-              return tuple(
-                  int(x) for x in match.group(1).split(".")
-              )
+              return tuple(map(int, m.group(1).split(".")))
 
-          sdk = max(paths, key=version)
-          sdk_name = os.path.basename(sdk)
-          sdk_version = ".".join(
-              map(str, version(sdk))
-          )
+          sdk = max(paths, key=ver)
+          name = os.path.basename(sdk)
+          version = ".".join(map(str, ver(sdk)))
 
           shutil.copytree(
               sdk,
-              os.path.join(destination, sdk_name),
+              os.path.join(os.path.expanduser("~/theos/sdks"), name),
               dirs_exist_ok=True
           )
 
-          print("Selected SDK:", sdk_name)
-          print("SDK version:", sdk_version)
+          print("Using SDK:", name)
 
-          with open(
-              os.environ["GITHUB_ENV"],
-              "a"
-          ) as f:
-              f.write("SDKVERSION=" + sdk_version + "\n")
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write("SDKVERSION=" + version + "\n")
           PY
 
-      # 5. Verify build environment
-      - name: Verify build tools
+      - name: Create package metadata
         run: |
-          echo "Theos: $THEOS"
-          echo "SDK: $SDKVERSION"
+          cat > HSONScanner.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+          "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Filter</key>
+              <dict>
+                  <key>Bundles</key>
+                  <array>
+                      <string>com.frontierdesign.videostar</string>
+                  </array>
+              </dict>
+          </dict>
+          </plist>
+          EOF
 
-          command -v make
-          command -v ldid
-          command -v dpkg-deb
+          cat > control <<'EOF'
+          Package: com.hson.scanner
+          Name: HSONScanner
+          Version: 1.0.0
+          Architecture: iphoneos-arm
+          Description: Runtime metadata diagnostic scanner
+          Maintainer: HSON
+          Author: HSON
+          Section: Tweaks
+          Depends: mobilesubstrate
+          EOF
 
-          ldid -h || true
+          plutil -lint HSONScanner.plist
+          test -s control
 
-      # 6. Check source
-      - name: Check project files
+      - name: Check project
         run: |
+          set -e
           test -f Makefile
           test -f HSONScanner.m
+          test -f HSONScanner.plist
+          test -f control
 
-          echo "Source files OK"
-
-      # 7. Build dylib
       - name: Build HSONScanner
         run: |
           set -e
-
           make clean
-
           make package \
             SDKVERSION="$SDKVERSION" \
             FINALPACKAGE=1
 
-      # 8. Verify package
-      - name: Verify package
+      - name: Extract and verify
         run: |
           set -e
-
           mkdir -p output/extracted
 
-          if ! find packages -type f -name "*.deb" \
-              -print -quit | grep -q .; then
-            echo "ERROR: No Debian package generated"
+          DEB=$(find packages -type f \
+            -name "*.deb" | head -n 1)
+
+          if [ -z "$DEB" ]; then
+            echo "No DEB package generated"
             exit 1
           fi
 
-          find packages -type f -name "*.deb" \
-            -exec cp {} output/ \;
+          cp "$DEB" output/
+          dpkg-deb -x "$DEB" output/extracted
 
-          for file in output/*.deb; do
-            dpkg-deb -x "$file" output/extracted
-          done
+          find output/extracted -type f \
+            -name "*.dylib" -exec cp {} output/ \;
 
-          find output/extracted -type f -name "*.dylib" \
-            -exec cp {} output/ \;
+          find output -type f -print
 
-          echo "Generated files:"
-          find output -type f
-
-      # 9. Upload artifacts
-      - name: Upload HSONScanner
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: HSONScanner-iOS
