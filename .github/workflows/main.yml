@@ -1,0 +1,44 @@
+
+name: Build HSONScanner
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build iOS dylib
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          brew install make
+          git clone --recursive https://github.com/theos/theos.git $THEOS
+
+      - name: Install iOS SDK
+        run: |
+          mkdir -p $THEOS/sdks
+          git clone https://github.com/theos/sdks.git /tmp/theos-sdks
+          cp -R /tmp/theos-sdks/iPhoneOS.sdk $THEOS/sdks/
+
+      - name: Build HSONScanner
+        run: |
+          export THEOS="$HOME/theos"
+          export PATH="/opt/homebrew/bin:$PATH"
+          make clean
+          make package FINALPACKAGE=1
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: HSONScanner-iOS
+          path: |
+            packages/*.deb
+            .theos/obj/*.dylib
+          if-no-files-found: warn
