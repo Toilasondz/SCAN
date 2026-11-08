@@ -7,38 +7,56 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    name: Build iOS dylib
+    name: Build HSONScanner iOS
     runs-on: macos-14
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Install dependencies
+        run: |
+          brew install make dpkg
+
       - name: Install Theos
         run: |
-          brew install make
-          git clone --recursive https://github.com/theos/theos.git $THEOS
+          git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
 
       - name: Install iOS SDK
         run: |
-          mkdir -p $THEOS/sdks
           git clone https://github.com/theos/sdks.git /tmp/theos-sdks
-          cp -R /tmp/theos-sdks/iPhoneOS.sdk $THEOS/sdks/
+          mkdir -p "$HOME/theos/sdks"
+          cp -R /tmp/theos-sdks/iPhoneOS.sdk "$HOME/theos/sdks/"
 
-      - name: Build HSONScanner
+      - name: Check project files
+        run: |
+          test -f Makefile
+          test -f HSONScanner.m
+          echo "Source files found"
+
+      - name: Build dylib
         run: |
           export THEOS="$HOME/theos"
-          export PATH="/opt/homebrew/bin:$PATH"
           make clean
           make package FINALPACKAGE=1
 
-      - name: Upload build artifacts
+      - name: Collect artifacts
+        run: |
+          mkdir -p output
+          find packages -type f \( -name "*.deb" -o -name "*.dylib" \) -exec cp {} output/ \; 2>/dev/null || true
+          find .theos -type f -name "*.dylib" -exec cp {} output/ \; 2>/dev/null || true
+          ls -lah output
+
+      - name: Upload HSONScanner
         uses: actions/upload-artifact@v4
         with:
-          name: HSONScanner-iOS
-          path: |
-            packages/*.deb
-            .theos/obj/*.dylib
-          if-no-files-found: warn
+          name: HSONScanner-iOS-build
+          path: output/*
+          if-no-files-found: error
+          retention-days: 7
