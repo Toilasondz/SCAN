@@ -16,15 +16,20 @@ jobs:
     runs-on: macos-15
 
     steps:
-      # 1. Download source
+      # 1. Checkout source
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # 2. Install dependencies
+      # 2. Install dependencies and signing tool
       - name: Install dependencies
         run: |
           brew update
-          brew install dpkg
+          brew install dpkg ldid
+
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+          command -v ldid
+          command -v dpkg-deb
 
       # 3. Install Theos
       - name: Install Theos
@@ -35,14 +40,14 @@ jobs:
 
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
 
-      # 4. Download iOS SDK
+      # 4. Install iOS SDK
       - name: Install iOS SDK
         run: |
           git clone --depth 1 \
             https://github.com/theos/sdks.git \
             /tmp/theos-sdks
 
-          mkdir -p "$THEOS/sdks"
+          mkdir -p "$HOME/theos/sdks"
 
           python3 - <<'PY'
           import os
@@ -53,99 +58,112 @@ jobs:
           root = "/tmp/theos-sdks"
           destination = os.path.expanduser("~/theos/sdks")
 
-          paths = glob.glob(root + "/**/iPhoneOS*.sdk",
-                            recursive=True)
+          paths = glob.glob(
+              root + "/**/iPhoneOS*.sdk",
+              recursive=True
+          )
 
-          paths = [p for p in paths if os.path.isdir(p)]
+          paths = [
+              p for p in paths
+              if os.path.isdir(p)
+          ]
 
           if not paths:
               raise SystemExit("ERROR: No iPhoneOS SDK found")
 
           def version(path):
               name = os.path.basename(path)
-              match = re.search(r'iPhoneOS([0-9.]+)\.sdk', name)
-              return tuple(map(int, match.group(1).split("."))) if match else (0,)
+              match = re.search(
+                  r'iPhoneOS([0-9.]+)\.sdk',
+                  name
+              )
+              if not match:
+                  return (0,)
+              return tuple(
+                  int(x) for x in match.group(1).split(".")
+              )
 
           sdk = max(paths, key=version)
-          name = os.path.basename(sdk)
+          sdk_name = os.path.basename(sdk)
+          sdk_version = ".".join(
+              map(str, version(sdk))
+          )
 
           shutil.copytree(
               sdk,
-              os.path.join(destination, name),
+              os.path.join(destination, sdk_name),
               dirs_exist_ok=True
           )
 
-          sdk_version = ".".join(map(str, version(sdk)))
-
-          print("Selected SDK:", name)
+          print("Selected SDK:", sdk_name)
           print("SDK version:", sdk_version)
 
-          with open(os.environ["GITHUB_ENV"], "a") as f:
+          with open(
+              os.environ["GITHUB_ENV"],
+              "a"
+          ) as f:
               f.write("SDKVERSION=" + sdk_version + "\n")
           PY
 
-      # 5. Check source files
-      - name: Check project
-        run: |
-          echo "Checking HSONScanner source..."
-
-          test -f Makefile || {
-            echo "ERROR: Makefile missing"
-            exit 1
-          }
-
-          test -f HSONScanner.m || {
-            echo "ERROR: HSONScanner.m missing"
-            exit 1
-          }
-
-          echo "Source files OK"
-
-      # 6. Build
-      - name: Build HSONScanner
+      # 5. Verify build environment
+      - name: Verify build tools
         run: |
           echo "Theos: $THEOS"
           echo "SDK: $SDKVERSION"
 
-          make clean || true
+          command -v make
+          command -v ldid
+          command -v dpkg-deb
+
+          ldid -h || true
+
+      # 6. Check source
+      - name: Check project files
+        run: |
+          test -f Makefile
+          test -f HSONScanner.m
+
+          echo "Source files OK"
+
+      # 7. Build dylib
+      - name: Build HSONScanner
+        run: |
+          set -e
+
+          make clean
 
           make package \
             SDKVERSION="$SDKVERSION" \
             FINALPACKAGE=1
 
-      # 7. Collect output
-      - name: Collect build files
+      # 8. Verify package
+      - name: Verify package
         run: |
           set -e
 
           mkdir -p output/extracted
 
-          echo "Searching for packages..."
-
-          DEBS=$(find packages -type f -name "*.deb" 2>/dev/null || true)
-
-          if [ -z "$DEBS" ]; then
-            echo "ERROR: No .deb package generated"
-            find .theos -type f -name "*.dylib" || true
+          if ! find packages -type f -name "*.deb" \
+              -print -quit | grep -q .; then
+            echo "ERROR: No Debian package generated"
             exit 1
           fi
 
-          for DEB in $DEBS; do
-            echo "Found: $DEB"
+          find packages -type f -name "*.deb" \
+            -exec cp {} output/ \;
 
-            cp "$DEB" output/
-
-            dpkg-deb -x "$DEB" output/extracted
+          for file in output/*.deb; do
+            dpkg-deb -x "$file" output/extracted
           done
 
           find output/extracted -type f -name "*.dylib" \
             -exec cp {} output/ \;
 
-          echo "Build output:"
+          echo "Generated files:"
           find output -type f
 
-      # 8. Upload artifacts
-      - name: Upload HSONScanner artifacts
+      # 9. Upload artifacts
+      - name: Upload HSONScanner
         uses: actions/upload-artifact@v4
         with:
           name: HSONScanner-iOS
